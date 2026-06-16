@@ -250,7 +250,7 @@ router.get("/bot/status", async (req, res): Promise<void> => {
 });
 
 // POST /trading/admin/sync — trigger OANDA sync and return diagnostic result
-router.post("/admin/sync", async (req, res) => {
+router.post("/trading/admin/sync", async (req, res) => {
   const result = await syncOandaPositions();
   res.json(result);
 });
