@@ -1,6 +1,41 @@
 import { Router, type IRouter } from "express";
+import { getOandaAccountSummary, getOandaOpenTrades, isOandaConnected } from "../../lib/oanda-bridge";
 
 const router: IRouter = Router();
+
+// ─── OANDA Diagnostic ────────────────────────────────────────────────────────
+
+router.get("/oanda/status", async (req, res): Promise<void> => {
+  const connected = isOandaConnected();
+  if (!connected) {
+    res.json({ connected: false, reason: "OANDA_API_TOKEN or OANDA_ACCOUNT_ID not set" });
+    return;
+  }
+
+  const [summary, openTrades] = await Promise.all([
+    getOandaAccountSummary(),
+    getOandaOpenTrades(),
+  ]);
+
+  if (!summary) {
+    res.json({
+      connected: false,
+      reason: "Token set but OANDA API rejected the request — token may be expired or have wrong permissions",
+    });
+    return;
+  }
+
+  res.json({
+    connected: true,
+    balance: summary.balance,
+    nav: summary.nav,
+    unrealizedPL: summary.unrealizedPL,
+    openTradeCount: summary.openTradeCount,
+    oandaOpenTrades: openTrades.slice(0, 5),
+  });
+});
+
+// ─── Market Candles ──────────────────────────────────────────────────────────
 
 const SYMBOL_MAP: Record<string, string> = {
   EURUSD: "EURUSD=X",
