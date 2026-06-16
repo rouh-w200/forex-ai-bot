@@ -15,6 +15,7 @@ import {
   GetBotStatusResponse,
 } from "@workspace/api-zod";
 import { getScalpingSignal } from "../../lib/trading-ai";
+import { syncOandaPositions } from "../../lib/autonomous-bot";
 
 const router: IRouter = Router();
 
@@ -248,6 +249,12 @@ router.get("/bot/status", async (req, res): Promise<void> => {
   }));
 });
 
+// POST /trading/admin/sync — trigger OANDA sync and return diagnostic result
+router.post("/admin/sync", async (req, res) => {
+  const result = await syncOandaPositions();
+  res.json(result);
+});
+
 function serializeTrade(t: typeof tradesTable.$inferSelect) {
   return {
     id: t.id,
@@ -270,6 +277,7 @@ function serializeTrade(t: typeof tradesTable.$inferSelect) {
     mtTicket: t.mtTicket ?? null,
     openedAt: t.openedAt.toISOString(),
     closedAt: t.closedAt?.toISOString() ?? null,
+    oandaTradeId: t.oandaTradeId ?? null,
   };
 }
 
