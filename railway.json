@@ -6,7 +6,7 @@
   },
   "deploy": {
     "startCommand": "node --enable-source-maps artifacts/api-server/dist/index.mjs",
-    "healthcheckPath": "/api/health",
+    "healthcheckPath": "/api/healthz",
     "restartPolicyType": "always"
   }
 }

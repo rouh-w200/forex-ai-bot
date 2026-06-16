@@ -700,7 +700,7 @@ async function signalLoop() {
 
 export function startAutonomousBot() {
   if (process.env["BOT_ENABLED"] === "false") {
-    logger.warn("🛑 Bot disabilitato (BOT_ENABLED=false) — nessuna chiamata Claude");
+    logger.warn("🛑 Bot disabilitato (BOT_ENABLED=false) — avvia con BOT_ENABLED=true");
     return;
   }
   logger.info(
