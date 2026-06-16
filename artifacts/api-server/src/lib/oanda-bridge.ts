@@ -61,7 +61,7 @@ export async function placeOandaOrder(opts: {
       units: lotsToUnits(opts.lots, opts.direction),
       stopLossOnFill: { price: opts.slPrice.toFixed(dp), timeInForce: "GTC" },
       takeProfitOnFill: { price: opts.tpPrice.toFixed(dp), timeInForce: "GTC" },
-      timeInForce: "FOK",
+      timeInForce: "IOC",
       positionFill: "DEFAULT",
     },
   };
