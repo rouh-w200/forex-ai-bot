@@ -7,7 +7,7 @@
  */
 
 import { db, tradesTable, botSignalsTable } from "@workspace/db";
-import { eq, and, gte, lte, count, desc, isNotNull } from "drizzle-orm";
+import { eq, and, gte, lte, count, desc, isNotNull, sql } from "drizzle-orm";
 import { getScalpingSignal, type MarketData } from "./trading-ai";
 import { logger } from "./logger";
 import {
@@ -511,9 +511,7 @@ async function syncOandaPositions() {
       }
       const oandaId = oandaBySymbol.get(dbTrade.symbol);
       if (!oandaId) continue;
-      await db.update(tradesTable)
-        .set({ oandaTradeId: oandaId })
-        .where(eq(tradesTable.id, dbTrade.id));
+      await db.execute(sql`UPDATE trades SET oanda_trade_id = ${oandaId} WHERE id = ${dbTrade.id}`);
       fixed++;
       oandaBySymbol.delete(dbTrade.symbol); // one DB trade per symbol
     }
@@ -573,15 +571,13 @@ async function openTrade(symbol: string, d: Awaited<ReturnType<typeof getScalpin
     status: "OPEN", openedAt: new Date(),
   }).returning();
 
-  // Two-step: UPDATE oandaTradeId separately to guarantee it's saved
+  // Two-step: raw SQL UPDATE to bypass any Drizzle camelCase mapping bugs
   if (oandaTradeId && inserted?.id) {
     try {
-      await db.update(tradesTable)
-        .set({ oandaTradeId })
-        .where(eq(tradesTable.id, inserted.id));
-      logger.info({ symbol, dbId: inserted.id, oandaTradeId }, "🔗 oandaTradeId saved via UPDATE");
+      await db.execute(sql`UPDATE trades SET oanda_trade_id = ${oandaTradeId} WHERE id = ${inserted.id}`);
+      logger.info({ symbol, dbId: inserted.id, oandaTradeId }, "🔗 oandaTradeId saved via raw SQL UPDATE");
     } catch (updateErr) {
-      logger.error({ err: updateErr, symbol, oandaTradeId }, "❌ Failed to save oandaTradeId — column may not exist in production DB");
+      logger.error({ err: updateErr, symbol, oandaTradeId }, "❌ Raw SQL UPDATE failed for oandaTradeId");
     }
   }
 
