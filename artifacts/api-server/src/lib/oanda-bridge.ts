@@ -62,8 +62,8 @@ export async function placeOandaOrder(opts: {
       stopLossOnFill: { price: opts.slPrice.toFixed(dp), timeInForce: "GTC" },
       takeProfitOnFill: { price: opts.tpPrice.toFixed(dp), timeInForce: "GTC" },
       timeInForce: "IOC",
-      // OPEN_ONLY: reject (never close) if a position already exists on this symbol
-      positionFill: "OPEN_ONLY",
+      // DEFAULT: on netting accounts, reverses position if opposite direction exists
+      positionFill: "DEFAULT",
     },
   };
 
