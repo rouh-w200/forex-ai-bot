@@ -62,6 +62,10 @@ const PIP: Record<string, number> = {
   GBPAUD: 0.0001,
 };
 
+// Fixed risk targets per trade (R:R = 1:2)
+const SL_USD = 1.20;
+const TP_USD = 2.40;
+
 // $ per pip at 0.01 lot (approximate USD account)
 const PIP_VAL: Record<string, number> = {
   EURUSD: 0.10, GBPUSD: 0.10, AUDUSD: 0.10, NZDUSD: 0.10,
@@ -484,10 +488,12 @@ async function getConsecLosses(symbol: string): Promise<number> {
 
 async function openTrade(symbol: string, d: Awaited<ReturnType<typeof getScalpingSignal>>, data: MarketData) {
   if (d.action === "HOLD") return;
-  const pip    = PIP[symbol];
+  const pip    = PIP[symbol]    ?? 0.0001;
+  const pipVal = PIP_VAL[symbol] ?? 0.10;
   const isJpy  = symbol.includes("JPY");
-  const sl     = d.stopLossPips  ?? 10;
-  const tp     = d.takeProfitPips ?? 20;
+  // Fixed SL=$1.20 / TP=$2.40 → R:R 1:2, overrides Claude's suggestion
+  const sl     = Math.round(SL_USD / pipVal);
+  const tp     = Math.round(TP_USD / pipVal);
   const entry  = d.action === "BUY" ? data.ask : data.bid;
   const sl_price = d.action === "BUY"
     ? parseFloat((entry - sl * pip).toFixed(isJpy ? 3 : 5))
