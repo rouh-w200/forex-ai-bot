@@ -62,7 +62,8 @@ export async function placeOandaOrder(opts: {
       stopLossOnFill: { price: opts.slPrice.toFixed(dp), timeInForce: "GTC" },
       takeProfitOnFill: { price: opts.tpPrice.toFixed(dp), timeInForce: "GTC" },
       timeInForce: "IOC",
-      positionFill: "DEFAULT",
+      // OPEN_ONLY: reject (never close) if a position already exists on this symbol
+      positionFill: "OPEN_ONLY",
     },
   };
 
@@ -76,16 +77,24 @@ export async function placeOandaOrder(opts: {
     const data = await res.json() as any;
 
     if (!res.ok) {
-      logger.error({ status: res.status, body: data }, "OANDA order rejected");
+      logger.warn({ status: res.status, symbol: opts.symbol }, "OANDA order rejected (position may already exist)");
       return null;
     }
 
     const fill = data.orderFillTransaction;
-    const tradeId = fill?.tradeOpened?.tradeID ?? fill?.tradesClosed?.[0]?.tradeID;
-    const price   = parseFloat(fill?.price ?? "0");
+    if (!fill) {
+      // Order cancelled (e.g. OPEN_ONLY rejected because position exists)
+      logger.warn({ symbol: opts.symbol, cancel: data.orderCancelTransaction?.reason }, "OANDA order not filled");
+      return null;
+    }
+
+    // tradeOpened is set when a NEW trade opens; fill.id is the same value in OANDA v20
+    const tradeId: string | undefined =
+      fill.tradeOpened?.tradeID ?? fill.id?.toString();
+    const price = parseFloat(fill.price ?? "0");
 
     if (!tradeId) {
-      logger.warn({ data }, "OANDA order filled but no tradeID found");
+      logger.warn({ symbol: opts.symbol }, "OANDA order filled but tradeID missing");
       return null;
     }
 
