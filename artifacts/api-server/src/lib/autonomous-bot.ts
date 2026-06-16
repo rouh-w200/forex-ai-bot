@@ -563,18 +563,30 @@ async function openTrade(symbol: string, d: Awaited<ReturnType<typeof getScalpin
     }
   }
 
-  await db.insert(tradesTable).values({
+  const [inserted] = await db.insert(tradesTable).values({
     symbol, direction: d.action,
     entryPrice: realEntry.toString(), lotSize: "0.01",
     stopLoss: sl_price.toString(), takeProfit: tp_price.toString(),
     stopLossPips: sl.toString(), takeProfitPips: tp.toString(),
     confidence: d.confidence?.toString(), reasoning: d.reasoning,
     riskRewardRatio: d.riskRewardRatio?.toString() ?? (tp / sl).toFixed(2),
-    oandaTradeId: oandaTradeId ?? null,
     status: "OPEN", openedAt: new Date(),
-  });
+  }).returning();
+
+  // Two-step: UPDATE oandaTradeId separately to guarantee it's saved
+  if (oandaTradeId && inserted?.id) {
+    try {
+      await db.update(tradesTable)
+        .set({ oandaTradeId })
+        .where(eq(tradesTable.id, inserted.id));
+      logger.info({ symbol, dbId: inserted.id, oandaTradeId }, "🔗 oandaTradeId saved via UPDATE");
+    } catch (updateErr) {
+      logger.error({ err: updateErr, symbol, oandaTradeId }, "❌ Failed to save oandaTradeId — column may not exist in production DB");
+    }
+  }
+
   logger.info(
-    { symbol, action: d.action, confidence: d.confidence, setup: d.setupType, oanda: !!oandaTradeId },
+    { symbol, action: d.action, confidence: d.confidence, setup: d.setupType, oanda: !!oandaTradeId, dbId: inserted?.id },
     oandaTradeId ? "✅ Trade opened on OANDA (REAL)" : "📋 Trade opened (simulation)"
   );
 }
