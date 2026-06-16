@@ -1,0 +1,12 @@
+.git
+.replit
+.replitignore
+.local
+node_modules
+**/node_modules
+**/.tsbuildinfo
+artifacts/trading-dashboard
+artifacts/mockup-sandbox
+**/dist
+attached_assets
+replit.md
