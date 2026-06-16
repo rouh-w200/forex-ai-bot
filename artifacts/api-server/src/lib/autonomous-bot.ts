@@ -15,6 +15,7 @@ import {
   placeOandaOrder,
   getOandaPrices,
   getOandaClosedTrade,
+  getOandaOpenTrades,
 } from "./oanda-bridge";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
@@ -484,6 +485,48 @@ async function getConsecLosses(symbol: string): Promise<number> {
   return n;
 }
 
+// ─── OANDA → DB Sync ──────────────────────────────────────────────────────────
+// At startup: fetch open OANDA trades and link them to unlinked DB trades.
+// This repairs any oandaTradeId=NULL that happened due to extraction bugs.
+
+async function syncOandaPositions() {
+  if (!isOandaConnected()) return;
+  try {
+    const oandaTrades = await getOandaOpenTrades();
+    if (!oandaTrades.length) return;
+
+    // Get all DB open trades that have no oandaTradeId yet
+    const unlinked = await db.select().from(tradesTable)
+      .where(and(eq(tradesTable.status, "OPEN")));
+
+    // Build a map: symbol → oanda tradeId
+    const oandaBySymbol = new Map<string, string>();
+    for (const t of oandaTrades) oandaBySymbol.set(t.instrument, t.tradeId);
+
+    let fixed = 0;
+    for (const dbTrade of unlinked) {
+      if (dbTrade.oandaTradeId) continue; // already linked
+      const oandaId = oandaBySymbol.get(dbTrade.symbol);
+      if (!oandaId) continue;
+      await db.update(tradesTable)
+        .set({ oandaTradeId: oandaId })
+        .where(eq(tradesTable.id, dbTrade.id));
+      fixed++;
+      oandaBySymbol.delete(dbTrade.symbol); // one DB trade per symbol
+    }
+
+    if (fixed) logger.info({ fixed }, "🔗 Synced OANDA trades → DB");
+
+    // Close any OANDA trades that have no DB record (orphans from old simulated runs)
+    // These are real OANDA positions with no DB counterpart — just log them
+    for (const [sym, oandaId] of oandaBySymbol) {
+      logger.warn({ sym, oandaId }, "⚠️ Orphan OANDA trade (no DB record) — will track via close loop");
+    }
+  } catch (err) {
+    logger.error({ err }, "OANDA sync error");
+  }
+}
+
 // ─── Trade Lifecycle ──────────────────────────────────────────────────────────
 
 async function openTrade(symbol: string, d: Awaited<ReturnType<typeof getScalpingSignal>>, data: MarketData) {
@@ -716,6 +759,10 @@ export function startAutonomousBot() {
 
   // Fetch real prices immediately on startup, then every 5 min via signalLoop
   fetchRealPrices().catch(e => logger.warn({ err: e }, "Initial real price fetch failed"));
+
+  // Sync OANDA → DB on startup and every 5 min to repair missing oandaTradeIds
+  syncOandaPositions().catch(e => logger.error({ err: e }, "Initial OANDA sync failed"));
+  setInterval(() => syncOandaPositions().catch(e => logger.error(e)), 5 * 60_000);
 
   // Close loop: runs every 20s to quickly free up position slots
   closeMaturedTrades().catch(e => logger.error(e));
