@@ -1,0 +1,685 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: Forex Scalping Bot API
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: trading
+    description: Trading signal and trade management
+  - name: stats
+    description: Performance statistics
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      description: Returns server health status
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /trading/signal:
+    post:
+      operationId: getTradeSignal
+      tags: [trading]
+      summary: Get a trade signal from Claude AI
+      description: Receives market data from the MT5 EA and returns a trading decision
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MarketDataInput"
+      responses:
+        "200":
+          description: Trading signal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TradeSignal"
+        "429":
+          description: Daily trade limit reached
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /market/candles:
+    get:
+      operationId: getMarketCandles
+      tags: [trading]
+      summary: Get OHLCV candle data from Yahoo Finance for a symbol
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: interval
+          in: query
+          schema:
+            type: string
+            default: "5m"
+      responses:
+        "200":
+          description: Candle list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CandleListResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /trading/trades:
+    get:
+      operationId: listTrades
+      tags: [trading]
+      summary: List all trades
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: date
+          in: query
+          description: Filter by date (YYYY-MM-DD)
+          schema:
+            type: string
+        - name: symbol
+          in: query
+          description: Filter by symbol (e.g. EURUSD)
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of trades
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TradeListResponse"
+    post:
+      operationId: openTrade
+      tags: [trading]
+      summary: Log an opened trade from the EA
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OpenTradeInput"
+      responses:
+        "201":
+          description: Trade logged
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Trade"
+
+  /trading/trades/{id}/close:
+    post:
+      operationId: closeTrade
+      tags: [trading]
+      summary: Log a closed trade from the EA
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CloseTradeInput"
+      responses:
+        "200":
+          description: Trade closed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Trade"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /trading/trades/{id}:
+    get:
+      operationId: getTrade
+      tags: [trading]
+      summary: Get a single trade
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Trade
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Trade"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /stats/daily:
+    get:
+      operationId: getDailyStats
+      tags: [stats]
+      summary: Get today's trading statistics
+      responses:
+        "200":
+          description: Daily statistics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DailyStats"
+
+  /stats/overview:
+    get:
+      operationId: getOverviewStats
+      tags: [stats]
+      summary: Get overall performance overview
+      responses:
+        "200":
+          description: Overview statistics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OverviewStats"
+
+  /stats/history:
+    get:
+      operationId: getStatsHistory
+      tags: [stats]
+      summary: Get daily stats history (last 30 days)
+      responses:
+        "200":
+          description: Array of daily stats
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DailyStatsRecord"
+
+  /bot/status:
+    get:
+      operationId: getBotStatus
+      tags: [trading]
+      summary: Get bot operational status
+      responses:
+        "200":
+          description: Bot status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotStatus"
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+
+    ApiError:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+
+    MarketDataInput:
+      type: object
+      properties:
+        symbol:
+          type: string
+          description: "Trading pair e.g. EURUSD"
+        timeframe:
+          type: string
+          description: "Chart timeframe e.g. M1, M5"
+        bid:
+          type: number
+        ask:
+          type: number
+        spread:
+          type: number
+          description: "Spread in pips"
+        atr:
+          type: number
+          description: "Average True Range"
+        rsi:
+          type: number
+          description: "RSI 14"
+        macdMain:
+          type: number
+        macdSignal:
+          type: number
+        macdHistogram:
+          type: number
+        ema20:
+          type: number
+        ema50:
+          type: number
+        ema200:
+          type: number
+        highPrice:
+          type: number
+          description: "Current candle high"
+        lowPrice:
+          type: number
+          description: "Current candle low"
+        closePrice:
+          type: number
+          description: "Previous candle close"
+        volume:
+          type: number
+        session:
+          type: string
+          description: "Market session: TOKYO, LONDON, NEW_YORK, OVERLAP"
+        trend:
+          type: string
+          description: "Trend direction: BULLISH, BEARISH, SIDEWAYS"
+        volatility:
+          type: string
+          description: "Volatility level: LOW, NORMAL, HIGH"
+        accountBalance:
+          type: number
+        accountEquity:
+          type: number
+        openPositions:
+          type: integer
+        todayTradeCount:
+          type: integer
+      required:
+        - symbol
+        - timeframe
+        - bid
+        - ask
+        - spread
+        - rsi
+        - macdMain
+        - macdSignal
+        - macdHistogram
+        - ema20
+        - ema50
+        - ema200
+        - highPrice
+        - lowPrice
+        - closePrice
+        - volume
+        - session
+        - trend
+        - volatility
+        - accountBalance
+        - accountEquity
+        - openPositions
+        - todayTradeCount
+
+    TradeSignal:
+      type: object
+      properties:
+        action:
+          type: string
+          description: "BUY, SELL, or HOLD"
+        confidence:
+          type: number
+          description: "0-100 confidence score"
+        entryPrice:
+          type: number
+        stopLossPips:
+          type: number
+        takeProfitPips:
+          type: number
+        lotSize:
+          type: number
+        reasoning:
+          type: string
+        riskRewardRatio:
+          type: number
+        maxDailyTradesReached:
+          type: boolean
+      required:
+        - action
+        - confidence
+        - reasoning
+        - maxDailyTradesReached
+
+    OpenTradeInput:
+      type: object
+      properties:
+        symbol:
+          type: string
+        direction:
+          type: string
+          description: "BUY or SELL"
+        entryPrice:
+          type: number
+        lotSize:
+          type: number
+        stopLoss:
+          type: number
+        takeProfit:
+          type: number
+        stopLossPips:
+          type: number
+        takeProfitPips:
+          type: number
+        confidence:
+          type: number
+        reasoning:
+          type: string
+        riskRewardRatio:
+          type: number
+        mtTicket:
+          type: integer
+          description: "MetaTrader order ticket number"
+      required:
+        - symbol
+        - direction
+        - entryPrice
+        - lotSize
+        - stopLoss
+        - takeProfit
+
+    CloseTradeInput:
+      type: object
+      properties:
+        closePrice:
+          type: number
+        profitLoss:
+          type: number
+        profitLossPips:
+          type: number
+        closeReason:
+          type: string
+          description: "TP_HIT, SL_HIT, MANUAL, TRAILING_STOP"
+      required:
+        - closePrice
+        - profitLoss
+
+    Trade:
+      type: object
+      properties:
+        id:
+          type: integer
+        symbol:
+          type: string
+        direction:
+          type: string
+        entryPrice:
+          type: number
+        closePrice:
+          type: number
+          nullable: true
+        lotSize:
+          type: number
+        stopLoss:
+          type: number
+        takeProfit:
+          type: number
+        stopLossPips:
+          type: number
+          nullable: true
+        takeProfitPips:
+          type: number
+          nullable: true
+        profitLoss:
+          type: number
+          nullable: true
+        profitLossPips:
+          type: number
+          nullable: true
+        confidence:
+          type: number
+          nullable: true
+        reasoning:
+          type: string
+          nullable: true
+        riskRewardRatio:
+          type: number
+          nullable: true
+        status:
+          type: string
+          description: "OPEN, CLOSED, CANCELLED"
+        closeReason:
+          type: string
+          nullable: true
+        mtTicket:
+          type: integer
+          nullable: true
+        openedAt:
+          type: string
+          format: date-time
+        closedAt:
+          type: string
+          format: date-time
+          nullable: true
+      required:
+        - id
+        - symbol
+        - direction
+        - entryPrice
+        - lotSize
+        - stopLoss
+        - takeProfit
+        - status
+        - openedAt
+
+    TradeListResponse:
+      type: object
+      properties:
+        trades:
+          type: array
+          items:
+            $ref: "#/components/schemas/Trade"
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+      required:
+        - trades
+        - total
+        - limit
+        - offset
+
+    DailyStats:
+      type: object
+      properties:
+        date:
+          type: string
+        totalTrades:
+          type: integer
+        openTrades:
+          type: integer
+        winningTrades:
+          type: integer
+        losingTrades:
+          type: integer
+        totalProfitLoss:
+          type: number
+        totalProfitLossPips:
+          type: number
+        winRate:
+          type: number
+        avgRR:
+          type: number
+        tradesRemaining:
+          type: integer
+        bestTrade:
+          type: number
+          nullable: true
+        worstTrade:
+          type: number
+          nullable: true
+      required:
+        - date
+        - totalTrades
+        - openTrades
+        - winningTrades
+        - losingTrades
+        - totalProfitLoss
+        - totalProfitLossPips
+        - winRate
+        - avgRR
+        - tradesRemaining
+
+    OverviewStats:
+      type: object
+      properties:
+        totalTrades:
+          type: integer
+        totalWins:
+          type: integer
+        totalLosses:
+          type: integer
+        totalProfitLoss:
+          type: number
+        winRate:
+          type: number
+        avgRR:
+          type: number
+        bestDay:
+          type: number
+        worstDay:
+          type: number
+        activeDays:
+          type: integer
+        currentStreak:
+          type: integer
+        longestWinStreak:
+          type: integer
+      required:
+        - totalTrades
+        - totalWins
+        - totalLosses
+        - totalProfitLoss
+        - winRate
+        - avgRR
+        - activeDays
+        - currentStreak
+        - longestWinStreak
+
+    DailyStatsRecord:
+      type: object
+      properties:
+        date:
+          type: string
+        totalTrades:
+          type: integer
+        winningTrades:
+          type: integer
+        losingTrades:
+          type: integer
+        totalProfitLoss:
+          type: number
+        winRate:
+          type: number
+      required:
+        - date
+        - totalTrades
+        - winningTrades
+        - losingTrades
+        - totalProfitLoss
+        - winRate
+
+    Candle:
+      type: object
+      properties:
+        time:
+          type: integer
+          description: Unix timestamp in seconds
+        open:
+          type: number
+        high:
+          type: number
+        low:
+          type: number
+        close:
+          type: number
+      required:
+        - time
+        - open
+        - high
+        - low
+        - close
+
+    CandleListResponse:
+      type: object
+      properties:
+        symbol:
+          type: string
+        interval:
+          type: string
+        candles:
+          type: array
+          items:
+            $ref: "#/components/schemas/Candle"
+      required:
+        - symbol
+        - interval
+        - candles
+
+    BotStatus:
+      type: object
+      properties:
+        isActive:
+          type: boolean
+        todayTradeCount:
+          type: integer
+        maxDailyTrades:
+          type: integer
+        tradesRemaining:
+          type: integer
+        openPositions:
+          type: integer
+        lastSignalAt:
+          type: string
+          format: date-time
+          nullable: true
+        lastSignalAction:
+          type: string
+          nullable: true
+      required:
+        - isActive
+        - todayTradeCount
+        - maxDailyTrades
+        - tradesRemaining
+        - openPositions
