@@ -26,6 +26,7 @@ export interface Trade {
   status: string;
   closeReason?: string | null;
   mtTicket?: number | null;
+  oandaTradeId?: string | null;
   openedAt: Date;
   closedAt?: Date | null;
 }
