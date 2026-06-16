@@ -110,6 +110,7 @@ export interface Trade {
   status: string;
   closeReason?: string | null;
   mtTicket?: number | null;
+  oandaTradeId?: string | null;
   openedAt: string;
   closedAt?: string | null;
 }
