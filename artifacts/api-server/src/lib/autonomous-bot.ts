@@ -489,42 +489,55 @@ async function getConsecLosses(symbol: string): Promise<number> {
 // At startup: fetch open OANDA trades and link them to unlinked DB trades.
 // This repairs any oandaTradeId=NULL that happened due to extraction bugs.
 
-async function syncOandaPositions() {
-  if (!isOandaConnected()) return;
+async function syncOandaPositions(): Promise<{ fixed: number; oandaCount: number; dbCount: number; details: string[] }> {
+  if (!isOandaConnected()) return { fixed: 0, oandaCount: 0, dbCount: 0, details: ["OANDA not connected"] };
   try {
     const oandaTrades = await getOandaOpenTrades();
-    if (!oandaTrades.length) return;
+    logger.info({ oandaCount: oandaTrades.length, symbols: oandaTrades.map(t => t.instrument).join(",") }, "🔍 Sync: OANDA open trades fetched");
 
-    // Get all DB open trades that have no oandaTradeId yet
+    if (!oandaTrades.length) return { fixed: 0, oandaCount: 0, dbCount: 0, details: ["No OANDA trades"] };
+
+    // Get all DB open trades
     const unlinked = await db.select().from(tradesTable)
       .where(and(eq(tradesTable.status, "OPEN")));
+
+    logger.info({ dbCount: unlinked.length, nullCount: unlinked.filter(t => !t.oandaTradeId).length }, "🔍 Sync: DB open trades fetched");
 
     // Build a map: symbol → oanda tradeId
     const oandaBySymbol = new Map<string, string>();
     for (const t of oandaTrades) oandaBySymbol.set(t.instrument, t.tradeId);
 
+    const details: string[] = [];
     let fixed = 0;
     for (const dbTrade of unlinked) {
       if (dbTrade.oandaTradeId) {
-        oandaBySymbol.delete(dbTrade.symbol); // already linked — remove from orphan map
+        oandaBySymbol.delete(dbTrade.symbol);
+        details.push(`${dbTrade.symbol}:already-linked(${dbTrade.oandaTradeId})`);
         continue;
       }
       const oandaId = oandaBySymbol.get(dbTrade.symbol);
-      if (!oandaId) continue;
-      await db.execute(sql`UPDATE trades SET oanda_trade_id = ${oandaId} WHERE id = ${dbTrade.id}`);
+      if (!oandaId) {
+        details.push(`${dbTrade.symbol}:no-oanda-match`);
+        continue;
+      }
+      const result = await db.execute(sql`UPDATE trades SET oanda_trade_id = ${oandaId} WHERE id = ${dbTrade.id} RETURNING oanda_trade_id`);
+      const saved = (result.rows?.[0] as any)?.oanda_trade_id;
+      details.push(`${dbTrade.symbol}:updated(id=${dbTrade.id},oanda=${oandaId},saved=${saved})`);
       fixed++;
-      oandaBySymbol.delete(dbTrade.symbol); // one DB trade per symbol
+      oandaBySymbol.delete(dbTrade.symbol);
     }
 
-    if (fixed) logger.info({ fixed }, "🔗 Synced OANDA trades → DB");
+    logger.info({ fixed, details: details.join("|") }, "🔗 Sync complete");
 
-    // Close any OANDA trades that have no DB record (orphans from old simulated runs)
-    // These are real OANDA positions with no DB counterpart — just log them
+    // Orphan OANDA trades
     for (const [sym, oandaId] of oandaBySymbol) {
-      logger.warn({ sym, oandaId }, "⚠️ Orphan OANDA trade (no DB record) — will track via close loop");
+      logger.warn({ sym, oandaId }, "⚠️ Orphan OANDA trade (no DB record)");
     }
+
+    return { fixed, oandaCount: oandaTrades.length, dbCount: unlinked.length, details };
   } catch (err) {
     logger.error({ err }, "OANDA sync error");
+    return { fixed: 0, oandaCount: 0, dbCount: 0, details: [`error: ${String(err)}`] };
   }
 }
 
@@ -774,6 +787,10 @@ async function signalLoop() {
     logger.error({ err }, "Signal loop error");
   }
 }
+
+// ─── Exports ──────────────────────────────────────────────────────────────────
+
+export { syncOandaPositions };
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 
