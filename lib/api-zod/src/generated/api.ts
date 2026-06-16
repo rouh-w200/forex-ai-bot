@@ -117,6 +117,7 @@ export const ListTradesResponse = zod.object({
   "status": zod.string().describe('OPEN, CLOSED, CANCELLED'),
   "closeReason": zod.string().nullish(),
   "mtTicket": zod.number().nullish(),
+  "oandaTradeId": zod.string().nullish(),
   "openedAt": zod.coerce.date(),
   "closedAt": zod.coerce.date().nullish()
 })),
@@ -178,6 +179,7 @@ export const CloseTradeResponse = zod.object({
   "status": zod.string().describe('OPEN, CLOSED, CANCELLED'),
   "closeReason": zod.string().nullish(),
   "mtTicket": zod.number().nullish(),
+  "oandaTradeId": zod.string().nullish(),
   "openedAt": zod.coerce.date(),
   "closedAt": zod.coerce.date().nullish()
 })
@@ -209,6 +211,7 @@ export const GetTradeResponse = zod.object({
   "status": zod.string().describe('OPEN, CLOSED, CANCELLED'),
   "closeReason": zod.string().nullish(),
   "mtTicket": zod.number().nullish(),
+  "oandaTradeId": zod.string().nullish(),
   "openedAt": zod.coerce.date(),
   "closedAt": zod.coerce.date().nullish()
 })
