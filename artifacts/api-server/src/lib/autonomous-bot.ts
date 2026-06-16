@@ -617,8 +617,20 @@ async function closeMaturedTrades() {
       continue; // OANDA manages its own trade lifecycle — don't simulate
     }
 
-    // ── Simulation mode: probabilistic close ──
+    // ── Orphan SIM trade when OANDA connected: close after 30 min ──
+    // These are trades with no oandaTradeId that have no real counterpart anymore.
     const elapsed = (now - new Date(trade.openedAt).getTime()) / 60000; // minutes
+    if (isOandaConnected() && !trade.oandaTradeId && elapsed > 30) {
+      await db.update(tradesTable).set({
+        closePrice: trade.entryPrice, profitLoss: "0.00",
+        profitLossPips: "0.0", closeReason: "ORPHAN_CLEANUP",
+        status: "CLOSED", closedAt: new Date(),
+      }).where(eq(tradesTable.id, trade.id));
+      logger.info({ id: trade.id, sym }, "🧹 Orphan SIM trade closed (no OANDA counterpart)");
+      continue;
+    }
+
+    // ── Simulation mode: probabilistic close ──
     if (elapsed < 3) continue;
 
     const prob = Math.min(0.95, (elapsed - 3) / 32);
@@ -652,11 +664,18 @@ async function signalLoop() {
     // Refresh real market prices every 5 minutes
     await maybeRefreshRealPrices();
 
-    const [todayCount, openCount, openSymbols] = await Promise.all([
+    const [todayCount, openCount, dbOpenSymbols, oandaOpenList] = await Promise.all([
       getTodayCount(), getOpenCount(), getOpenSymbols(),
+      isOandaConnected() ? getOandaOpenTrades() : Promise.resolve([]),
     ]);
     if (todayCount >= MAX_DAILY_TRADES) { logger.info("Daily limit reached"); return; }
     if (openCount  >= MAX_OPEN)         { logger.info({ openCount }, "Max positions open"); return; }
+
+    // Merge DB open symbols with OANDA open symbols to avoid double-opening
+    const openSymbols = new Set([
+      ...dbOpenSymbols,
+      ...oandaOpenList.map(t => t.instrument),
+    ]);
 
     const session = getSession();
 
