@@ -505,7 +505,10 @@ async function syncOandaPositions() {
 
     let fixed = 0;
     for (const dbTrade of unlinked) {
-      if (dbTrade.oandaTradeId) continue; // already linked
+      if (dbTrade.oandaTradeId) {
+        oandaBySymbol.delete(dbTrade.symbol); // already linked — remove from orphan map
+        continue;
+      }
       const oandaId = oandaBySymbol.get(dbTrade.symbol);
       if (!oandaId) continue;
       await db.update(tradesTable)
