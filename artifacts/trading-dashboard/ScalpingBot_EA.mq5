@@ -13,7 +13,7 @@
 #include <Trade\PositionInfo.mqh>
 
 //--- Input parameters
-input string   ApiUrl             = "https://YOUR-APP.replit.app/api";  // URL API server (senza slash finale)
+input string   ApiUrl             = "https://workspaceapi-server-production-a3ab.up.railway.app/api";  // URL API server (senza slash finale)
 input string   TradingSymbol      = "EURUSD";    // Simbolo da tradare
 input string   Timeframe          = "M1";        // Timeframe (M1, M5, M15)
 input int      SignalIntervalSec  = 30;          // Secondi tra ogni richiesta di segnale
