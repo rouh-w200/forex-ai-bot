@@ -483,6 +483,9 @@ components:
         mtTicket:
           type: integer
           nullable: true
+        oandaTradeId:
+          type: string
+          nullable: true
         openedAt:
           type: string
           format: date-time
