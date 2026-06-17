@@ -255,10 +255,10 @@ router.post("/trading/admin/sync", async (req, res) => {
   res.json(result);
 });
 
-// POST /trading/admin/fix-sltp — one-time: recompute SL/TP from real entry price for open trades
-// Uses correct PIP_VAL table (post Jun 2026 correction: GBPAUD/EURAUD/JPY fixed)
+// POST /trading/admin/fix-sltp — recompute SL/TP from real entry price for open trades
+// Uses current risk targets (SL=$0.60 / TP=$1.20, R:R 1:2)
 router.post("/trading/admin/fix-sltp", async (req, res) => {
-  const SL_USD = 1.20, TP_USD = 2.40;
+  const SL_USD = 0.60, TP_USD = 1.20;
   const PIP_VAL: Record<string, number> = {
     EURUSD: 0.10, GBPUSD: 0.10, AUDUSD: 0.10, NZDUSD: 0.10,
     USDCAD: 0.072, USDCHF: 0.112,
