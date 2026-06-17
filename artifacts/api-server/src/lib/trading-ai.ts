@@ -192,12 +192,11 @@ async function callGemini(prompt: string): Promise<string> {
     body:    JSON.stringify({
       contents:       [{ parts: [{ text: prompt }] }],
       generationConfig: {
-        responseMimeType: "application/json",
-        temperature:      0.2,
-        maxOutputTokens:  200,
+        temperature:     0.2,
+        maxOutputTokens: 400,
       },
     }),
-    signal: AbortSignal.timeout(12_000),
+    signal: AbortSignal.timeout(15_000),
   });
 
   if (!res.ok) {
@@ -222,16 +221,23 @@ interface GeminiDecision {
 
 function parseGeminiResponse(text: string): TradingDecision | null {
   try {
-    const raw = JSON.parse(text.trim()) as GeminiDecision;
-    if (!["BUY", "SELL", "HOLD"].includes(raw.action)) return null;
-    if (typeof raw.confidence !== "number")              return null;
+    // Extract JSON object even if surrounded by preamble/markdown
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return null;
+    const raw = JSON.parse(jsonMatch[0]) as GeminiDecision;
+
+    // Normalize action to uppercase and coerce confidence to number
+    const action = String(raw.action ?? "").toUpperCase().trim() as "BUY" | "SELL" | "HOLD";
+    const confidence = typeof raw.confidence === "number" ? raw.confidence : Number(raw.confidence);
+    if (!["BUY", "SELL", "HOLD"].includes(action)) return null;
+    if (!Number.isFinite(confidence))               return null;
 
     const slPips = 12;
     const tpPips = 24;
 
     return {
-      action:         raw.action as "BUY" | "SELL" | "HOLD",
-      confidence:     Math.min(95, Math.max(50, Math.round(raw.confidence))),
+      action:         action,
+      confidence:     Math.min(95, Math.max(50, Math.round(confidence))),
       reasoning:      String(raw.reasoning ?? "").slice(0, 180),
       setupType:      raw.setupType ?? "TREND_CONTINUATION",
       stopLossPips:   slPips,
