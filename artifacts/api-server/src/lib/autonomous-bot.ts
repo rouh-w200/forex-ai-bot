@@ -63,9 +63,9 @@ const PIP: Record<string, number> = {
   GBPAUD: 0.0001,
 };
 
-// Fixed risk targets per trade (R:R = 1:2) — tighter = faster slot recycling
-const SL_USD = 0.60;
-const TP_USD = 1.20;
+// Fixed risk targets per trade (R:R = 1:2)
+const SL_USD = 1.20;
+const TP_USD = 2.40;
 
 // $ per pip at 0.01 lot (1000 units) — recalculated at approx rates Jun 2026
 // USD-quote pairs: 1000 × 0.0001 = $0.10/pip (always)
