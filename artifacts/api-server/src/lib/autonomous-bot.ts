@@ -67,13 +67,17 @@ const PIP: Record<string, number> = {
 const SL_USD = 1.20;
 const TP_USD = 2.40;
 
-// $ per pip at 0.01 lot (approximate USD account)
+// $ per pip at 0.01 lot (1000 units) — recalculated at approx rates Jun 2026
+// USD-quote pairs: 1000 × 0.0001 = $0.10/pip (always)
+// USD-base pairs: 0.1/USDXXX rate
+// JPY pairs:     10/USDJPY ≈ 10/155.5 = $0.064/pip
+// Cross EUR/GBP/AUD/CAD: 0.1 × quote-to-USD rate
 const PIP_VAL: Record<string, number> = {
   EURUSD: 0.10, GBPUSD: 0.10, AUDUSD: 0.10, NZDUSD: 0.10,
   USDCAD: 0.072, USDCHF: 0.112,
-  USDJPY: 0.067, GBPJPY: 0.067, EURJPY: 0.067, AUDJPY: 0.067, NZDJPY: 0.067,
-  EURGBP: 0.126, EURAUD: 0.062, EURCAD: 0.072,
-  GBPAUD: 0.048,
+  USDJPY: 0.064, GBPJPY: 0.064, EURJPY: 0.064, AUDJPY: 0.064, NZDJPY: 0.064,
+  EURGBP: 0.126, EURAUD: 0.064, EURCAD: 0.072,
+  GBPAUD: 0.064,   // 0.1 × AUDUSD(0.640) — was wrongly 0.048
 };
 
 // ─── Market Regime ─────────────────────────────────────────────────────────────
@@ -545,39 +549,46 @@ async function syncOandaPositions(): Promise<{ fixed: number; oandaCount: number
 
 async function openTrade(symbol: string, d: Awaited<ReturnType<typeof getScalpingSignal>>, data: MarketData) {
   if (d.action === "HOLD") return;
-  const pip    = PIP[symbol]    ?? 0.0001;
   const pipVal = PIP_VAL[symbol] ?? 0.10;
   const isJpy  = symbol.includes("JPY");
+  const pip    = isJpy ? 0.01 : 0.0001;
   // Fixed SL=$1.20 / TP=$2.40 → R:R 1:2, overrides Claude's suggestion
-  const sl     = Math.round(SL_USD / pipVal);
-  const tp     = Math.round(TP_USD / pipVal);
-  const entry  = d.action === "BUY" ? data.ask : data.bid;
-  const sl_price = d.action === "BUY"
-    ? parseFloat((entry - sl * pip).toFixed(isJpy ? 3 : 5))
-    : parseFloat((entry + sl * pip).toFixed(isJpy ? 3 : 5));
-  const tp_price = d.action === "BUY"
-    ? parseFloat((entry + tp * pip).toFixed(isJpy ? 3 : 5))
-    : parseFloat((entry - tp * pip).toFixed(isJpy ? 3 : 5));
+  const sl     = Math.round(SL_USD / pipVal);   // pips
+  const tp     = Math.round(TP_USD / pipVal);   // pips
+  // Simulated entry for fallback (when OANDA is not connected)
+  const simEntry = d.action === "BUY" ? data.ask : data.bid;
+  const dp = isJpy ? 3 : 5;
 
   // If OANDA is connected → place a REAL order on the broker
+  // slPips/tpPips use OANDA "distance" format — SL/TP are set relative to the
+  // ACTUAL fill price, not our simulated price (prevents wrong SL/TP placement)
   let oandaTradeId: string | undefined;
-  let realEntry = entry;
+  let realEntry  = simEntry;
+  let realSlPrice = d.action === "BUY"
+    ? parseFloat((simEntry - sl * pip).toFixed(dp))
+    : parseFloat((simEntry + sl * pip).toFixed(dp));
+  let realTpPrice = d.action === "BUY"
+    ? parseFloat((simEntry + tp * pip).toFixed(dp))
+    : parseFloat((simEntry - tp * pip).toFixed(dp));
+
   if (isOandaConnected()) {
     const result = await placeOandaOrder({
       symbol, direction: d.action, lots: 0.01,
-      slPrice: sl_price, tpPrice: tp_price,
+      slPips: sl, tpPips: tp,
     });
     if (result) {
       oandaTradeId = result.oandaTradeId;
       realEntry    = result.entryPrice;
-      logger.info({ symbol, oandaTradeId, realEntry }, "🟢 REAL OANDA order executed");
+      realSlPrice  = result.slPrice;   // computed from actual fill price
+      realTpPrice  = result.tpPrice;   // computed from actual fill price
+      logger.info({ symbol, oandaTradeId, realEntry, realSlPrice, realTpPrice, sl, tp }, "🟢 REAL OANDA order executed");
     }
   }
 
   const [inserted] = await db.insert(tradesTable).values({
     symbol, direction: d.action,
     entryPrice: realEntry.toString(), lotSize: "0.01",
-    stopLoss: sl_price.toString(), takeProfit: tp_price.toString(),
+    stopLoss:  realSlPrice.toString(), takeProfit: realTpPrice.toString(),
     stopLossPips: sl.toString(), takeProfitPips: tp.toString(),
     confidence: d.confidence?.toString(), reasoning: d.reasoning,
     riskRewardRatio: d.riskRewardRatio?.toString() ?? (tp / sl).toFixed(2),
