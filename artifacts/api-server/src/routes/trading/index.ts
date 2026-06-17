@@ -255,6 +255,45 @@ router.post("/trading/admin/sync", async (req, res) => {
   res.json(result);
 });
 
+// POST /trading/admin/fix-sltp — one-time: recompute SL/TP from real entry price for open trades
+// Uses correct PIP_VAL table (post Jun 2026 correction: GBPAUD/EURAUD/JPY fixed)
+router.post("/trading/admin/fix-sltp", async (req, res) => {
+  const SL_USD = 1.20, TP_USD = 2.40;
+  const PIP_VAL: Record<string, number> = {
+    EURUSD: 0.10, GBPUSD: 0.10, AUDUSD: 0.10, NZDUSD: 0.10,
+    USDCAD: 0.072, USDCHF: 0.112,
+    USDJPY: 0.064, GBPJPY: 0.064, EURJPY: 0.064, AUDJPY: 0.064, NZDJPY: 0.064,
+    EURGBP: 0.126, EURAUD: 0.064, EURCAD: 0.072, GBPAUD: 0.064,
+  };
+
+  const openTrades = await db.select().from(tradesTable).where(eq(tradesTable.status, "OPEN"));
+  const results: Array<{ id: number; symbol: string; slOld: string; tpOld: string; slNew: string; tpNew: string; slPips: number; tpPips: number }> = [];
+
+  for (const trade of openTrades) {
+    const entry = parseFloat(trade.entryPrice);
+    if (!entry) continue;
+    const sym = trade.symbol;
+    const pv = PIP_VAL[sym] ?? 0.10;
+    const isJpy = sym.includes("JPY");
+    const pip = isJpy ? 0.01 : 0.0001;
+    const dp = isJpy ? 3 : 5;
+    const sl = Math.round(SL_USD / pv);
+    const tp = Math.round(TP_USD / pv);
+    const slNew = trade.direction === "BUY"
+      ? (entry - sl * pip).toFixed(dp)
+      : (entry + sl * pip).toFixed(dp);
+    const tpNew = trade.direction === "BUY"
+      ? (entry + tp * pip).toFixed(dp)
+      : (entry - tp * pip).toFixed(dp);
+
+    await db.execute(sql`UPDATE trades SET stop_loss=${slNew}, take_profit=${tpNew}, stop_loss_pips=${sl.toString()}, take_profit_pips=${tp.toString()} WHERE id=${trade.id}`);
+    results.push({ id: trade.id, symbol: sym, slOld: trade.stopLoss, tpOld: trade.takeProfit, slNew, tpNew, slPips: sl, tpPips: tp });
+  }
+
+  req.log.info({ count: results.length }, "admin/fix-sltp complete");
+  res.json({ fixed: results.length, trades: results });
+});
+
 function serializeTrade(t: typeof tradesTable.$inferSelect) {
   return {
     id: t.id,
