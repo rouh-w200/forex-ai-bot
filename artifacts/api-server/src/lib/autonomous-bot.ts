@@ -22,10 +22,10 @@ import {
 
 const MAX_DAILY_TRADES  = 1000;
 const DAILY_TARGET      = 800;        // aim for 800 quality trades/day
-const SIGNAL_INTERVAL   = 60_000;     // scan every 60 seconds
-const CLOSE_INTERVAL    = 20_000;     // check closures every 20 seconds
+const SIGNAL_INTERVAL   = 30_000;     // scan every 30 seconds (was 60)
+const CLOSE_INTERVAL    = 15_000;     // check closures every 15 seconds (was 20)
 const MAX_OPEN          = 15;         // max concurrent positions (capped to 1 per symbol)
-const MAX_PER_CYCLE     = 8;          // max new trades per scan cycle
+const MAX_PER_CYCLE     = 10;         // max new trades per scan cycle (was 8)
 
 const SYMBOLS = [
   // Majors
@@ -63,9 +63,9 @@ const PIP: Record<string, number> = {
   GBPAUD: 0.0001,
 };
 
-// Fixed risk targets per trade (R:R = 1:2)
-const SL_USD = 1.20;
-const TP_USD = 2.40;
+// Fixed risk targets per trade (R:R = 1:2) — tighter = faster slot recycling
+const SL_USD = 0.60;
+const TP_USD = 1.20;
 
 // $ per pip at 0.01 lot (1000 units) — recalculated at approx rates Jun 2026
 // USD-quote pairs: 1000 × 0.0001 = $0.10/pip (always)
