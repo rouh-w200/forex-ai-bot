@@ -43,26 +43,33 @@ function headers() {
 }
 
 // ─── Place a market order with SL and TP ─────────────────────────────────────
+// Uses OANDA's "distance" format so SL/TP are relative to the ACTUAL fill price,
+// not a pre-computed simulated price. This guarantees correct pip distances.
 
 export async function placeOandaOrder(opts: {
   symbol: string;
   direction: "BUY" | "SELL";
   lots: number;
-  slPrice: number;
-  tpPrice: number;
-}): Promise<{ oandaTradeId: string; entryPrice: number } | null> {
+  slPips: number;   // SL distance in pips (always positive)
+  tpPips: number;   // TP distance in pips (always positive)
+}): Promise<{ oandaTradeId: string; entryPrice: number; slPrice: number; tpPrice: number } | null> {
   if (!isOandaConnected()) return null;
 
-  const dp = opts.symbol.includes("JPY") ? 3 : 5;
+  const isJpy     = opts.symbol.includes("JPY");
+  const pip       = isJpy ? 0.01 : 0.0001;
+  const dp        = isJpy ? 3 : 5;
+  const slDist    = (opts.slPips * pip).toFixed(dp);
+  const tpDist    = (opts.tpPips * pip).toFixed(dp);
+
   const body = {
     order: {
       type: "MARKET",
       instrument: toInstrument(opts.symbol),
       units: lotsToUnits(opts.lots, opts.direction),
-      stopLossOnFill: { price: opts.slPrice.toFixed(dp), timeInForce: "GTC" },
-      takeProfitOnFill: { price: opts.tpPrice.toFixed(dp), timeInForce: "GTC" },
+      // "distance" is relative to fill price → no dependence on simulated prices
+      stopLossOnFill:   { distance: slDist, timeInForce: "GTC" },
+      takeProfitOnFill: { distance: tpDist, timeInForce: "GTC" },
       timeInForce: "IOC",
-      // DEFAULT: on netting accounts, reverses position if opposite direction exists
       positionFill: "DEFAULT",
     },
   };
@@ -77,32 +84,38 @@ export async function placeOandaOrder(opts: {
     const data = await res.json() as any;
 
     if (!res.ok) {
-      logger.warn({ status: res.status, symbol: opts.symbol }, "OANDA order rejected (position may already exist)");
+      logger.warn({ status: res.status, body: data, symbol: opts.symbol }, "OANDA order rejected");
       return null;
     }
 
     const fill = data.orderFillTransaction;
     if (!fill) {
-      // Order cancelled (e.g. OPEN_ONLY rejected because position exists)
       logger.warn({ symbol: opts.symbol, cancel: data.orderCancelTransaction?.reason }, "OANDA order not filled");
       return null;
     }
 
-    // tradeOpened is set when a NEW trade opens; fill.id is the same value in OANDA v20
     const tradeId: string | undefined =
       fill.tradeOpened?.tradeID ?? fill.id?.toString();
-    const price = parseFloat(fill.price ?? "0");
+    const fillPrice = parseFloat(fill.price ?? "0");
 
-    if (!tradeId) {
-      logger.warn({ symbol: opts.symbol }, "OANDA order filled but tradeID missing");
+    if (!tradeId || !fillPrice) {
+      logger.warn({ symbol: opts.symbol, fill }, "OANDA order filled but tradeID/price missing");
       return null;
     }
 
+    // Compute actual SL/TP prices from the real fill price
+    const slPrice = opts.direction === "BUY"
+      ? parseFloat((fillPrice - opts.slPips * pip).toFixed(dp))
+      : parseFloat((fillPrice + opts.slPips * pip).toFixed(dp));
+    const tpPrice = opts.direction === "BUY"
+      ? parseFloat((fillPrice + opts.tpPips * pip).toFixed(dp))
+      : parseFloat((fillPrice - opts.tpPips * pip).toFixed(dp));
+
     logger.info(
-      { symbol: opts.symbol, direction: opts.direction, tradeId, price },
+      { symbol: opts.symbol, direction: opts.direction, tradeId, fillPrice, slPrice, tpPrice, slPips: opts.slPips, tpPips: opts.tpPips },
       "✅ OANDA order placed"
     );
-    return { oandaTradeId: tradeId, entryPrice: price };
+    return { oandaTradeId: tradeId, entryPrice: fillPrice, slPrice, tpPrice };
   } catch (err) {
     logger.error({ err }, "OANDA order fetch error");
     return null;
