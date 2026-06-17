@@ -85,35 +85,35 @@ const MAX_DAILY_TRADES = 1000;
 
 /**
  * Rule-based scalping signal engine — no AI required.
- * Implements the same entry conditions as the original Claude prompt:
+ * Entry conditions:
  *
- * KILLZONE (London 07-09, NY 13-14:30 UTC) → 2 factors = TRADE
- * NORMAL SESSION → 3 factors = TRADE
+ * ANY SESSION → 2 factors = TRADE  (same as killzone rules in original)
+ * KILLZONE (London 07-09, NY 13-14:30 UTC) → 1 factor = TRADE (extra aggressive)
  *
  * Factors:
  *  F1 — EMA stack aligned in trade direction
  *  F2 — RSI 35-65 range AND trending toward trade direction
  *  F3 — MACD histogram expanding in trade direction
- *  F4 — ADX > 22 with correct DI alignment
+ *  F4 — ADX > 18 with correct DI alignment
  *  F5 — Near order block OR bullish/bearish FVG present
  *
  * Hard filters (HOLD regardless):
- *  - Spread > 2 pips
- *  - ADX < 18 (ranging)
- *  - consecutiveLosses >= 3 (circuit breaker)
+ *  - Spread > 3 pips
+ *  - ADX < 15 (extreme ranging)
+ *  - consecutiveLosses >= 4 (circuit breaker — relaxed from 3)
  *  - todayTradeCount >= MAX_DAILY_TRADES
  */
 export async function getScalpingSignal(data: MarketData): Promise<TradingDecision> {
   if (data.todayTradeCount >= MAX_DAILY_TRADES) {
     return { action: "HOLD", confidence: 100, reasoning: "Daily limit of 1000 trades reached." };
   }
-  if ((data.consecutiveLosses ?? 0) >= 3) {
-    return { action: "HOLD", confidence: 100, reasoning: "Circuit breaker: 3 consecutive losses. Pausing." };
+  if ((data.consecutiveLosses ?? 0) >= 4) {
+    return { action: "HOLD", confidence: 100, reasoning: "Circuit breaker: 4 consecutive losses. Pausing." };
   }
-  if (data.spread > 2) {
+  if (data.spread > 3) {
     return { action: "HOLD", confidence: 80, reasoning: `Spread ${data.spread.toFixed(1)} pips too wide — cost kills edge.` };
   }
-  if ((data.adx ?? 25) < 18) {
+  if ((data.adx ?? 25) < 15) {
     return { action: "HOLD", confidence: 70, reasoning: `ADX ${(data.adx ?? 0).toFixed(1)} — market ranging, no trend to follow.` };
   }
 
@@ -145,7 +145,7 @@ export async function getScalpingSignal(data: MarketData): Promise<TradingDecisi
   }
 
   // F4: ADX trend with bullish DI
-  if (adx > 22 && plusDI > minusDI) {
+  if (adx > 18 && plusDI > minusDI) {
     buyFactors.push("ADX_DI_BULL");
   }
 
@@ -175,7 +175,7 @@ export async function getScalpingSignal(data: MarketData): Promise<TradingDecisi
   }
 
   // F4: ADX trend with bearish DI
-  if (adx > 22 && minusDI > plusDI) {
+  if (adx > 18 && minusDI > plusDI) {
     sellFactors.push("ADX_DI_BEAR");
   }
 
@@ -184,8 +184,8 @@ export async function getScalpingSignal(data: MarketData): Promise<TradingDecisi
     sellFactors.push("SMC_BEAR_CONFLUENCE");
   }
 
-  // ── Threshold — killzone needs 2, normal session needs 3 ─────────────────────
-  const threshold = data.killzone ? 2 : 3;
+  // ── Threshold — always 2; killzone drops to 1 (extra aggressive) ────────────
+  const threshold = data.killzone ? 1 : 2;
 
   const buyScore  = buyFactors.length;
   const sellScore = sellFactors.length;
