@@ -14,6 +14,7 @@ import {
   isOandaConnected,
   placeOandaOrder,
   getOandaPrices,
+  getOandaCandles,
   getOandaClosedTrade,
   getOandaOpenTrades,
 } from "./oanda-bridge";
@@ -290,6 +291,299 @@ function stdDev(arr: number[]): number {
   return Math.sqrt(arr.reduce((a, b) => a + (b - m) ** 2, 0) / arr.length);
 }
 
+// ─── Technical Indicator Calculations ─────────────────────────────────────────
+// Pure functions operating on raw OHLCV arrays from real OANDA candles.
+
+/** Exponential Moving Average (seeded with SMA of first `period` bars). */
+function calcEma(prices: number[], period: number): number[] {
+  const n = prices.length;
+  if (n < period) return new Array(n).fill(prices[n - 1] ?? 0);
+  const k = 2 / (period + 1);
+  const result = new Array(n).fill(0);
+  let seed = 0;
+  for (let i = 0; i < period; i++) seed += prices[i];
+  result[period - 1] = seed / period;
+  for (let i = period; i < n; i++) {
+    result[i] = prices[i] * k + result[i - 1] * (1 - k);
+  }
+  // Back-fill so every index has a value
+  for (let i = 0; i < period - 1; i++) result[i] = result[period - 1];
+  return result;
+}
+
+/** Wilder's RSI (period 14). Returns array same length as closes. */
+function calcRsi(closes: number[], period = 14): number[] {
+  const n = closes.length;
+  const result = new Array(n).fill(50);
+  if (n <= period) return result;
+
+  let avgGain = 0, avgLoss = 0;
+  for (let i = 1; i <= period; i++) {
+    const d = closes[i] - closes[i - 1];
+    if (d > 0) avgGain += d; else avgLoss -= d;
+  }
+  avgGain /= period;
+  avgLoss /= period;
+
+  const rsiAt = (g: number, l: number) => l === 0 ? 100 : 100 - 100 / (1 + g / l);
+  result[period] = rsiAt(avgGain, avgLoss);
+
+  for (let i = period + 1; i < n; i++) {
+    const d = closes[i] - closes[i - 1];
+    avgGain = (avgGain * (period - 1) + Math.max(0,  d)) / period;
+    avgLoss = (avgLoss * (period - 1) + Math.max(0, -d)) / period;
+    result[i] = rsiAt(avgGain, avgLoss);
+  }
+  for (let i = 0; i < period; i++) result[i] = result[period];
+  return result;
+}
+
+/** MACD (12, 26, 9). Returns macd line, signal line, histogram arrays. */
+function calcMacd(closes: number[], fast = 12, slow = 26, signal = 9) {
+  const emaFast = calcEma(closes, fast);
+  const emaSlow = calcEma(closes, slow);
+  const macd    = closes.map((_, i) => emaFast[i] - emaSlow[i]);
+  const sig     = calcEma(macd, signal);
+  return { macd, signal: sig, histogram: macd.map((m, i) => m - sig[i]) };
+}
+
+/** Wilder's ADX (period 14). Returns adx, plusDI, minusDI arrays. */
+function calcAdx(highs: number[], lows: number[], closes: number[], period = 14) {
+  const n = closes.length;
+  const fill = (v: number) => new Array(n).fill(v);
+  if (n <= period * 2) return { adx: fill(25), plusDI: fill(20), minusDI: fill(20) };
+
+  const tr = new Array(n).fill(0);
+  const pDM = new Array(n).fill(0);
+  const mDM = new Array(n).fill(0);
+  for (let i = 1; i < n; i++) {
+    tr[i]  = Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1]));
+    const up   = highs[i] - highs[i - 1];
+    const down = lows[i - 1] - lows[i];
+    pDM[i] = up > down && up > 0 ? up : 0;
+    mDM[i] = down > up && down > 0 ? down : 0;
+  }
+
+  // Wilder's initial sum
+  let atr = 0, sPDM = 0, sMDM = 0;
+  for (let i = 1; i <= period; i++) { atr += tr[i]; sPDM += pDM[i]; sMDM += mDM[i]; }
+
+  const pDIArr = fill(20);
+  const mDIArr = fill(20);
+  const dx = fill(0);
+
+  for (let i = period; i < n; i++) {
+    if (i > period) {
+      atr  = atr  - atr  / period + tr[i];
+      sPDM = sPDM - sPDM / period + pDM[i];
+      sMDM = sMDM - sMDM / period + mDM[i];
+    }
+    const pDI = atr > 0 ? 100 * sPDM / atr : 0;
+    const mDI = atr > 0 ? 100 * sMDM / atr : 0;
+    pDIArr[i] = pDI;
+    mDIArr[i] = mDI;
+    dx[i]     = (pDI + mDI) > 0 ? 100 * Math.abs(pDI - mDI) / (pDI + mDI) : 0;
+  }
+
+  // ADX = Wilder's smoothing of DX starting from 2*period
+  let adxVal = 0;
+  for (let i = period; i < 2 * period; i++) adxVal += dx[i];
+  adxVal /= period;
+  const adxArr = fill(25);
+  adxArr[2 * period - 1] = adxVal;
+  for (let i = 2 * period; i < n; i++) {
+    adxVal = (adxVal * (period - 1) + dx[i]) / period;
+    adxArr[i] = adxVal;
+  }
+
+  for (let i = 0; i < period; i++) { pDIArr[i] = pDIArr[period]; mDIArr[i] = mDIArr[period]; }
+  return { adx: adxArr, plusDI: pDIArr, minusDI: mDIArr };
+}
+
+/** Bollinger Bands (period 20, mult 2). */
+function calcBollinger(closes: number[], period = 20, mult = 2) {
+  const n = closes.length;
+  const upper = [...closes], mid = [...closes], lower = [...closes];
+  for (let i = period - 1; i < n; i++) {
+    const sl   = closes.slice(i - period + 1, i + 1);
+    const mean = sl.reduce((a, b) => a + b, 0) / period;
+    const sd   = Math.sqrt(sl.reduce((a, b) => a + (b - mean) ** 2, 0) / period);
+    mid[i]   = mean;
+    upper[i] = mean + mult * sd;
+    lower[i] = mean - mult * sd;
+  }
+  return { upper, mid, lower };
+}
+
+/** ATR (period 14) using EMA smoothing. */
+function calcAtr(highs: number[], lows: number[], closes: number[], period = 14): number[] {
+  const tr = [highs[0] - lows[0]];
+  for (let i = 1; i < closes.length; i++) {
+    tr.push(Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1])));
+  }
+  return calcEma(tr, period);
+}
+
+// ─── Candle Cache ──────────────────────────────────────────────────────────────
+// Stores real M5 OHLCV arrays per symbol, refreshed every 5 min.
+
+interface CandleData {
+  opens: number[]; highs: number[]; lows: number[]; closes: number[]; volumes: number[];
+  fetchedAt: number;
+}
+
+const candleCache: Record<string, CandleData> = {};
+const CANDLE_TTL = 5 * 60 * 1000; // refresh at most once per M5 candle period
+
+async function refreshCandlesForSymbol(symbol: string): Promise<void> {
+  const cached = candleCache[symbol];
+  if (cached && Date.now() - cached.fetchedAt < CANDLE_TTL) return;
+  try {
+    const candles = await getOandaCandles(symbol, 250, "M5");
+    if (candles.length < 50) {
+      logger.warn({ symbol, count: candles.length }, "Too few candles — skipping indicator calc");
+      return;
+    }
+    candleCache[symbol] = {
+      opens:   candles.map(c => c.open),
+      highs:   candles.map(c => c.high),
+      lows:    candles.map(c => c.low),
+      closes:  candles.map(c => c.close),
+      volumes: candles.map(c => c.volume),
+      fetchedAt: Date.now(),
+    };
+    logger.info({ symbol, candles: candles.length }, "📊 Real M5 candles cached");
+  } catch (err) {
+    logger.warn({ err, symbol }, "Candle refresh failed");
+  }
+}
+
+async function refreshAllCandles(symbols: string[]): Promise<void> {
+  if (!isOandaConnected()) return;
+  await Promise.all(symbols.map(refreshCandlesForSymbol));
+}
+
+// ─── Build MarketData from real candles ───────────────────────────────────────
+// Calculates RSI, MACD, EMA20/50/200, ADX, Bollinger and ATR from real OANDA
+// M5 candle data. Falls back to simulation when candles are unavailable.
+
+function buildDataFromCandles(
+  symbol: string,
+  cd: CandleData,
+  todayCount: number,
+  openPositions: number,
+): MarketData {
+  const { opens, highs, lows, closes, volumes } = cd;
+  const n = closes.length;
+
+  const ema20s  = calcEma(closes, 20);
+  const ema50s  = calcEma(closes, 50);
+  const ema200s = calcEma(closes, 200);
+  const rsis    = calcRsi(closes, 14);
+  const { macd: macdLine, signal: signalLine, histogram } = calcMacd(closes);
+  const { adx: adxArr, plusDI: plusDIs, minusDI: minusDIs } = calcAdx(highs, lows, closes, 14);
+  const bb   = calcBollinger(closes, 20, 2);
+  const atrs = calcAtr(highs, lows, closes, 14);
+
+  const lastClose = closes[n - 1];
+  const prevClose = closes[n - 2] ?? lastClose;
+
+  const ema20       = ema20s[n - 1];
+  const ema50       = ema50s[n - 1];
+  const ema200      = ema200s[n - 1];
+  const rsi         = Math.max(0, Math.min(100, rsis[n - 1]));
+  const rsiPrev     = Math.max(0, Math.min(100, rsis[n - 2] ?? rsi));
+  const macdMain    = macdLine[n - 1];
+  const macdSig     = signalLine[n - 1];
+  const macdHist    = histogram[n - 1];
+  const macdHistPrev = histogram[n - 2] ?? macdHist;
+  const adx         = Math.max(0, adxArr[n - 1]);
+  const plusDI      = Math.max(0, plusDIs[n - 1]);
+  const minusDI     = Math.max(0, minusDIs[n - 1]);
+  const atr         = atrs[n - 1];
+  const bbUpper     = bb.upper[n - 1];
+  const bbMid       = bb.mid[n - 1];
+  const bbLower     = bb.lower[n - 1];
+
+  const pip   = PIP[symbol] ?? 0.0001;
+  const isJpy = symbol.includes("JPY");
+  const dp    = isJpy ? 3 : 5;
+  const spreadPips = isJpy ? rand(0.7, 1.8) : rand(0.4, 1.3);
+  const spread = parseFloat((spreadPips * pip).toFixed(dp));
+
+  // Use real-time mid from mkt (updated by fetchRealPrices / OANDA tick prices)
+  const realMid = mkt[symbol]?.price ?? lastClose;
+  const bid = realMid;
+  const ask = parseFloat((realMid + spread).toFixed(dp));
+
+  // Volume stats from last 20 candles
+  const recentVols = volumes.slice(-20);
+  const curVol     = recentVols[recentVols.length - 1] ?? 1000;
+  const volAvg     = recentVols.reduce((a, b) => a + b, 0) / recentVols.length || 1;
+
+  // Swing levels from real candle highs/lows (last 50 bars)
+  const swingHighs = highs.slice(-50);
+  const swingLows  = lows.slice(-50);
+  const swingHigh  = Math.max(...swingHighs);
+  const swingLow   = Math.min(...swingLows);
+
+  // Trend from EMA stack
+  const trend = ema20 > ema50 && ema50 > ema200 ? "BULLISH"
+              : ema20 < ema50 && ema50 < ema200 ? "BEARISH"
+              : "SIDEWAYS";
+
+  // Update mkt state so simulation fallback stays anchored to real prices
+  if (mkt[symbol]) {
+    const s = mkt[symbol];
+    s.price  = realMid;
+    s.ema20  = ema20;
+    s.ema50  = ema50;
+    s.ema200 = ema200;
+    s.rsi    = rsi;
+    s.rsiPrev = rsiPrev;
+    s.macdMain   = macdMain;
+    s.macdSignal = macdSig;
+    s.trend  = trend as "BULLISH" | "BEARISH" | "SIDEWAYS";
+  }
+
+  const s = mkt[symbol];
+  const session = getSession();
+
+  return {
+    symbol, timeframe: "M5",
+    bid, ask, spread: spreadPips,
+    openPrice: opens[n - 1] ?? lastClose,
+    prevClose,
+    highPrice: highs[n - 1], lowPrice: lows[n - 1], closePrice: lastClose,
+    ema20, ema50, ema200, atr,
+    rsi, rsiPrev,
+    macdMain, macdSignal: macdSig, macdHistogram: macdHist, macdHistPrev,
+    bollingerUpper: parseFloat(bbUpper.toFixed(dp)),
+    bollingerMid:   parseFloat(bbMid.toFixed(dp)),
+    bollingerLower: parseFloat(bbLower.toFixed(dp)),
+    bollingerWidth: parseFloat((bbUpper - bbLower).toFixed(dp)),
+    adx, plusDI, minusDI,
+    volume: curVol, volumeAvg: Math.round(volAvg), volumeRatio: parseFloat((curVol / volAvg).toFixed(2)),
+    swingHigh, swingLow,
+    structureBias: lastClose > swingHigh * 0.998 ? "BULLISH_BOS"
+                 : lastClose < swingLow  * 1.002 ? "BEARISH_BOS"
+                 : "RANGING",
+    nearOrderBlock: Math.random() < 0.32,
+    fairValueGap: Math.abs(lastClose - prevClose) > pip * 4
+      ? (lastClose > prevClose ? "BULLISH_FVG" : "BEARISH_FVG")
+      : "NONE",
+    liquidityLevel: lastClose > swingHigh * 0.9997 ? "ABOVE"
+                  : lastClose < swingLow  * 1.0003 ? "BELOW"
+                  : "NONE",
+    session, killzone: isKillzone(), trend, volatility: getVolatility(session),
+    dxyBias: s?.dxyBias ?? "NEUTRAL",
+    riskSentiment: s?.riskSentiment ?? "NEUTRAL",
+    consecutiveLosses: s?.consecutiveLosses ?? 0,
+    accountBalance: 10000, accountEquity: 10000, openPositions, todayTradeCount: todayCount,
+    dailyTarget: DAILY_TARGET,
+  };
+}
+
 function getSession(): string {
   const h = new Date().getUTCHours();
   if (h >= 7 && h < 9)   return "LONDON_OPEN";
@@ -402,6 +696,13 @@ function tick(symbol: string) {
 }
 
 function buildData(symbol: string, todayCount: number, openPositions: number): MarketData {
+  // ── Real candles path: use actual OANDA M5 data for all indicators ──
+  const cached = candleCache[symbol];
+  if (cached && cached.closes.length >= 50) {
+    return buildDataFromCandles(symbol, cached, todayCount, openPositions);
+  }
+
+  // ── Simulation fallback: regime-biased synthetic indicators ──
   tick(symbol);
   const s       = mkt[symbol];
   const pip     = PIP[symbol];
@@ -725,13 +1026,17 @@ async function signalLoop() {
       ...SYMBOLS.filter(s => !preferred.includes(s)),
     ];
 
-    // Fetch consecutive losses for each symbol in parallel
-    const lossMap = Object.fromEntries(
-      await Promise.all(toScan.map(async sym => [sym, await getConsecLosses(sym)]))
-    );
+    // Fetch real M5 candles + consecutive losses in parallel
+    const [lossEntries] = await Promise.all([
+      Promise.all(toScan.map(async sym => [sym, await getConsecLosses(sym)] as [string, number])),
+      refreshAllCandles(toScan),  // no-op when OANDA not connected
+    ]);
+    const lossMap = Object.fromEntries(lossEntries);
     for (const sym of toScan) if (mkt[sym]) mkt[sym].consecutiveLosses = lossMap[sym] ?? 0;
 
-    // Build regime-biased market data for each symbol
+    // Build market data — uses real candle indicators when available, sim fallback otherwise
+    const usingReal = isOandaConnected() && toScan.some(s => candleCache[s]?.closes.length >= 50);
+    logger.info({ mode: usingReal ? "REAL_CANDLES" : "SIMULATION" }, "📊 Building market data");
     const marketDataMap = Object.fromEntries(
       toScan.map(sym => [sym, buildData(sym, todayCount, openCount)])
     );
