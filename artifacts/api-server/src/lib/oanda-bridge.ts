@@ -274,4 +274,50 @@ export async function getOandaClosedTrade(oandaTradeId: string): Promise<{
   }
 }
 
+// ─── Fetch M5 candles for indicator calculations ──────────────────────────────
+
+export interface OandaCandle {
+  time: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+export async function getOandaCandles(
+  symbol: string,
+  count = 250,
+  granularity = "M5",
+): Promise<OandaCandle[]> {
+  if (!isOandaConnected()) return [];
+
+  const instrument = toInstrument(symbol);
+  try {
+    const res = await fetch(
+      `${BASE_URL}/v3/instruments/${instrument}/candles?count=${count}&granularity=${granularity}&price=M`,
+      { headers: headers() },
+    );
+
+    if (!res.ok) {
+      logger.warn({ status: res.status, symbol }, "OANDA candles fetch failed");
+      return [];
+    }
+
+    const data = (await res.json()) as any;
+    // Include the last (incomplete) candle too so we always have the most recent close
+    return (data.candles ?? []).map((c: any) => ({
+      time: c.time as string,
+      open: parseFloat(c.mid?.o ?? "0"),
+      high: parseFloat(c.mid?.h ?? "0"),
+      low: parseFloat(c.mid?.l ?? "0"),
+      close: parseFloat(c.mid?.c ?? "0"),
+      volume: (c.volume as number) ?? 0,
+    }));
+  } catch (err) {
+    logger.warn({ err, symbol }, "OANDA candles fetch error");
+    return [];
+  }
+}
+
 export { toInstrument, fromInstrument };
