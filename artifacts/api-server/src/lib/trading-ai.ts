@@ -171,6 +171,20 @@ Respond ONLY with valid JSON (no markdown, no text outside JSON):
 setupType options: EMA_PULLBACK | MACD_MOMENTUM | TREND_CONTINUATION | OB_BOUNCE | MOMENTUM | REVERSAL`;
 }
 
+// ── Gemini rate limiter (max 8 RPM — free tier is 10 RPM) ────────────────────
+
+const _geminiCallTs: number[] = [];
+const GEMINI_RPM_LIMIT = 8;
+
+function geminiRateLimitOk(): boolean {
+  const now = Date.now();
+  const cutoff = now - 60_000;
+  while (_geminiCallTs.length > 0 && (_geminiCallTs[0] ?? 0) < cutoff) _geminiCallTs.shift();
+  if (_geminiCallTs.length >= GEMINI_RPM_LIMIT) return false;
+  _geminiCallTs.push(now);
+  return true;
+}
+
 // ── Gemini REST call ──────────────────────────────────────────────────────────
 
 interface GeminiCandidate {
@@ -270,6 +284,11 @@ export async function getScalpingSignal(data: MarketData): Promise<TradingDecisi
   }
   if ((data.adx ?? 25) < 15) {
     return { action: "HOLD", confidence: 70, reasoning: `ADX ${(data.adx ?? 0).toFixed(1)} — market ranging, no trend to follow.` };
+  }
+
+  if (!geminiRateLimitOk()) {
+    logger.warn({ symbol: data.symbol }, "Gemini rate limit — HOLD (>8 RPM)");
+    return { action: "HOLD", confidence: 50, reasoning: "Gemini rate limit — holding." };
   }
 
   try {
